@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+*.pyc
+frames_cache.npz
+render_run.log
