@@ -90,7 +90,7 @@ def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
     g_disk = np.zeros(n)
     active = np.ones(n, dtype=bool)
 
-    eps_th = 1e-6
+    eps_th = 1e-4
 
     old_err = np.seterr(all='ignore')
     for _ in range(max_steps):
@@ -101,7 +101,17 @@ def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
             dr, dth, dphi, dpr, dpth = derivatives(r_, th_, pr_, pth_, a, L)
             return dr, dth, dphi, dpr, dpth
 
-        dlam = np.clip(step_coeff * (r - 0.9 * r_h), 1e-4, dlambda_max)
+        # g_phiphi_inv ~ 1/sin^2(theta) diverges near the poles (a Boyer-Lindquist
+        # coordinate singularity, not a physical feature) and multiplies L^2 in the
+        # geodesic Hamiltonian, so near-axis rays (small alpha, i.e. small L) can pick
+        # up large numerical noise in dp_theta/dlambda close to the fixed eps_th clamp
+        # below. Shrink the step there so the integrator doesn't overshoot into it.
+        dist_to_pole = np.minimum(th, np.pi - th)
+        pole_dlam = np.where(dist_to_pole < 0.05,
+                              np.maximum(dist_to_pole, eps_th) * 5.0,
+                              dlambda_max)
+        dlam = np.clip(np.minimum(step_coeff * (r - 0.9 * r_h), pole_dlam),
+                        1e-4, dlambda_max)
 
         k1 = deriv(r, th, phi, pr, pth)
         r1 = r + 0.5 * dlam * k1[0]
