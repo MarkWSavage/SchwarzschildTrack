@@ -5,7 +5,11 @@ self-contained HTML file.
 """
 import base64
 import io
+import json
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor
+
 import numpy as np
 import plotly.graph_objects as go
 from PIL import Image
@@ -126,7 +130,7 @@ def hsv_to_rgb(h, s, v):
     return rgb
 
 
-def make_frame(a, resolution=RESOLUTION, verbose=True):
+def make_frame(a, theta_obs=THETA_OBS, resolution=RESOLUTION, verbose=True):
     lin = np.linspace(-HALF_FOV, HALF_FOV, resolution)
     alpha_grid, beta_grid = np.meshgrid(lin, lin)
     alpha = alpha_grid.ravel()
@@ -134,15 +138,16 @@ def make_frame(a, resolution=RESOLUTION, verbose=True):
 
     t0 = time.time()
     status, theta_f, phi_f, r_disk, g_disk = trace(
-        alpha, beta, R_OBS, THETA_OBS, a, disk_outer=DISK_OUTER,
+        alpha, beta, R_OBS, theta_obs, a, disk_outer=DISK_OUTER,
         disk_h_ratio=DISK_H_RATIO)
     if verbose:
         n_abs = (status == 0).sum()
         n_esc = (status == 1).sum()
         n_unr = (status == 2).sum()
         n_disk = (status == 3).sum()
-        print(f'a={a:+.3f}  absorbed={n_abs:6d}  escaped={n_esc:6d}  '
-              f'disk={n_disk:6d}  unresolved={n_unr:6d}  ({time.time()-t0:.1f}s)')
+        print(f'a={a:+.3f}  incl={np.rad2deg(theta_obs):5.1f}  absorbed={n_abs:6d}  '
+              f'escaped={n_esc:6d}  disk={n_disk:6d}  unresolved={n_unr:6d}  '
+              f'({time.time()-t0:.1f}s)')
 
     rgb = np.zeros((alpha.size, 3))
     esc = (status == 1)
@@ -153,7 +158,12 @@ def make_frame(a, resolution=RESOLUTION, verbose=True):
     # absorbed and unresolved (status 0 and 2) stay pure black (shadow)
 
     img = rgb.reshape(resolution, resolution, 3)
-    return img
+    return (img * 255).astype(np.uint8)
+
+
+def _make_frame_worker(args):
+    a, theta_obs, resolution = args
+    return make_frame(a, theta_obs=theta_obs, resolution=resolution)
 
 
 def frame_to_data_uri(frame_uint8):
@@ -167,59 +177,62 @@ def frame_to_data_uri(frame_uint8):
     return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
 
 
-def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
-               cache_path='frames_cache.npz'):
+def build_html(spins, inclinations_deg, out_path='kerr_shadow.html',
+               resolution=RESOLUTION, cache_path='frames_cache.npz', max_workers=None):
+    """spins x inclinations_deg form a 2D grid of frames, rendered in parallel
+    across processes (each frame is an independent ray trace). The page
+    exposes both axes as custom HTML range sliders driving Plotly.restyle,
+    since Plotly's built-in slider/frame mechanism only natively supports a
+    single animation axis.
+    """
+    spins = list(spins)
+    inclinations_deg = list(inclinations_deg)
+    n_a, n_i = len(spins), len(inclinations_deg)
+
     cache = None
-    if cache_path and __import__('os').path.exists(cache_path):
+    if cache_path and os.path.exists(cache_path):
         loaded = np.load(cache_path)
-        if loaded['resolution'] == resolution and np.array_equal(loaded['spins'], spins):
+        if (loaded['resolution'] == resolution
+                and np.array_equal(loaded['spins'], spins)
+                and np.array_equal(loaded['inclinations_deg'], inclinations_deg)):
             cache = loaded['frames']
 
     if cache is not None:
-        frames_data = [cache[i] for i in range(len(spins))]
+        frames_grid = cache
     else:
-        frames_data = []
-        for a in spins:
-            img = make_frame(a, resolution=resolution)
-            frames_data.append((img * 255).astype(np.uint8))
+        t0 = time.time()
+        jobs = [(a, np.deg2rad(incl), resolution) for a in spins for incl in inclinations_deg]
+        with ProcessPoolExecutor(max_workers=max_workers) as ex:
+            flat = list(ex.map(_make_frame_worker, jobs))
+        print(f'rendered {len(jobs)} frames in {time.time()-t0:.1f}s wall time '
+              f'(max_workers={max_workers or os.cpu_count()})')
+        frames_grid = np.stack(flat).reshape(n_a, n_i, resolution, resolution, 3)
         if cache_path:
-            np.savez_compressed(cache_path, frames=np.stack(frames_data),
-                                 spins=np.array(spins), resolution=resolution)
+            np.savez_compressed(cache_path, frames=frames_grid,
+                                 spins=np.array(spins),
+                                 inclinations_deg=np.array(inclinations_deg),
+                                 resolution=resolution)
 
-    data_uris = [frame_to_data_uri(frame) for frame in frames_data]
+    uri_grid = [[frame_to_data_uri(frames_grid[ai, ii]) for ii in range(n_i)]
+                for ai in range(n_a)]
 
-    fig = go.Figure(
-        data=[go.Image(source=data_uris[0])],
-        frames=[
-            go.Frame(data=[go.Image(source=data_uris[i])], name=f'{a:.3f}')
-            for i, a in enumerate(spins)
-        ],
-    )
+    default_ai = 0
+    default_ii = int(np.argmin(np.abs(np.array(inclinations_deg) - 75.0)))
 
-    steps = []
-    for i, a in enumerate(spins):
-        steps.append(dict(
-            method='animate',
-            args=[[f'{a:.3f}'],
-                  dict(mode='immediate', frame=dict(duration=0, redraw=True),
-                       transition=dict(duration=0))],
-            label=f'a = {a:.3f}',
-        ))
-
+    fig = go.Figure(data=[go.Image(source=uri_grid[default_ai][default_ii])])
     fig.update_layout(
-        title=f'Kerr black hole shadow &amp; lensed sky '
-              f'(observer inclination {np.rad2deg(THETA_OBS):.0f} deg)',
-        sliders=[dict(active=0, currentvalue=dict(prefix='spin '), pad=dict(t=40),
-                      steps=steps)],
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
-        margin=dict(l=10, r=10, t=60, b=10),
+        margin=dict(l=10, r=10, t=10, b=10),
         template='plotly_dark',
-        width=800, height=860,
+        width=800, height=800,
     )
     fig.update_xaxes(scaleanchor='y', scaleratio=1)
 
-    plot_fragment = fig.to_html(include_plotlyjs=True, full_html=False)
+    plot_fragment = fig.to_html(include_plotlyjs=True, full_html=False, div_id='bhplot')
+    frames_json = json.dumps(uri_grid)
+    spins_json = json.dumps(spins)
+    incls_json = json.dumps(inclinations_deg)
     page = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -252,20 +265,72 @@ def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
                       color: #8a8aa0; margin-top: .2rem; }}
   footer {{ margin-top: 1.5rem; font-size: .75rem; color: #6a6a80; text-align: center; }}
   footer a {{ color: #9a9ac0; }}
+  .controls {{
+    width: 100%; max-width: 700px; margin: 1rem auto 0;
+    display: flex; flex-direction: column; gap: 1rem;
+  }}
+  .control-row label {{
+    display: flex; justify-content: space-between; font-size: .85rem;
+    color: #c2c2d0; margin-bottom: .3rem;
+  }}
+  .control-row .value {{ color: #f2f2f8; font-variant-numeric: tabular-nums; }}
+  input[type="range"] {{
+    -webkit-appearance: none; appearance: none; width: 100%; height: 4px;
+    border-radius: 2px; background: #2a2a3a; outline: none;
+  }}
+  input[type="range"]::-webkit-slider-thumb {{
+    -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+    background: #8ab4ff; cursor: pointer; border: 2px solid #0b0b12;
+  }}
+  input[type="range"]::-moz-range-thumb {{
+    width: 16px; height: 16px; border-radius: 50%; background: #8ab4ff;
+    cursor: pointer; border: 2px solid #0b0b12;
+  }}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>Kerr black hole shadow &amp; accretion disk</h1>
   <p class="subtitle">
-    Backward ray-traced null geodesics in Kerr spacetime (observer inclination
-    {np.rad2deg(THETA_OBS):.0f}&deg; from the spin axis). Drag the slider to see how the
-    shadow and disk change with spin <code>a</code>, from Schwarzschild
-    (<code>a=0</code>) to near-extremal (<code>a=0.998</code>).
+    Backward ray-traced null geodesics in Kerr spacetime. Drag the sliders to see how
+    the shadow and disk change with spin <code>a</code> (Schwarzschild <code>a=0</code>
+    to near-extremal <code>a=0.998</code>) and with the observer's inclination from the
+    spin axis.
   </p>
   <div class="plot-holder">
   {plot_fragment}
   </div>
+  <div class="controls">
+    <div class="control-row">
+      <label>
+        <span>spin <code>a</code></span>
+        <span class="value" id="spinLabel"></span>
+      </label>
+      <input type="range" id="spinSlider" min="0" max="{n_a - 1}" step="1"
+             value="{default_ai}" oninput="updateBH()">
+    </div>
+    <div class="control-row">
+      <label>
+        <span>observer inclination</span>
+        <span class="value" id="inclLabel"></span>
+      </label>
+      <input type="range" id="inclSlider" min="0" max="{n_i - 1}" step="1"
+             value="{default_ii}" oninput="updateBH()">
+    </div>
+  </div>
+  <script>
+    const BH_FRAMES = {frames_json};
+    const BH_SPINS = {spins_json};
+    const BH_INCLS = {incls_json};
+    function updateBH() {{
+      const ai = parseInt(document.getElementById('spinSlider').value, 10);
+      const ii = parseInt(document.getElementById('inclSlider').value, 10);
+      document.getElementById('spinLabel').textContent = 'a = ' + BH_SPINS[ai].toFixed(3);
+      document.getElementById('inclLabel').textContent = BH_INCLS[ii] + '°';
+      Plotly.restyle('bhplot', {{source: [[BH_FRAMES[ai][ii]]]}}, [0]);
+    }}
+    updateBH();
+  </script>
   <div class="legend">
     <h2>Color key</h2>
     <div class="legend-row">
@@ -308,4 +373,5 @@ def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
 
 if __name__ == '__main__':
     spins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.998]
-    build_html(spins)
+    inclinations_deg = [15, 35, 55, 75, 90]
+    build_html(spins, inclinations_deg)
