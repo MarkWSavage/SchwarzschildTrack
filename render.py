@@ -198,5 +198,5 @@ def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
 
 
 if __name__ == '__main__':
-    spins = [0.0, 0.5, 0.9, 0.998]
+    spins = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.998]
     build_html(spins)
