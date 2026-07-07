@@ -48,3 +48,17 @@ python render.py          # writes kerr_shadow.html (frames cached in frames_cac
 
 Open `kerr_shadow.html` in a browser and drag the sliders to compare shadows
 and disk images across spin values and observer inclinations.
+
+## Examples
+
+`examples/human_view_a0.9_incl45.png` — a custom still (spin `a=0.9`, camera
+at `r=60M`, 45&deg; inclination) using `starfield_color()` in place of the
+diagnostic grid, for a more "what would a human see" look:
+
+```python
+from render import make_frame, starfield_color, DISK_OUTER
+import numpy as np
+
+img = make_frame(0.9, theta_obs=np.deg2rad(45.0), resolution=600,
+                  r_obs=3 * DISK_OUTER, sky_color_fn=starfield_color)
+```
