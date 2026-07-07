@@ -108,6 +108,58 @@ def celestial_color(theta_f, phi_f):
     return rgb
 
 
+def _hash2d(ix, iy, seed):
+    """Deterministic pseudo-random float in [0, 1) per (ix, iy, seed) cell,
+    vectorized. Same inputs always give the same output, so stars stay put
+    across pixels/frames instead of flickering as noise.
+    """
+    h = (ix.astype(np.int64) * 374761393 + iy.astype(np.int64) * 668265263
+         + seed * 2654435761) & 0xffffffff
+    h = (h ^ (h >> 13)) * 1274126177 & 0xffffffff
+    h = h ^ (h >> 16)
+    return (h & 0xffffff) / float(0xffffff)
+
+
+def starfield_color(theta_f, phi_f, cell_deg=0.7, star_prob=0.02, star_radius_deg=0.12):
+    """Procedural starfield on the celestial sphere: stars are placed
+    deterministically by hashing a coarse (theta, phi) grid cell, so a given
+    sky position always has the same star regardless of which ray reaches
+    it -- lensing bends real point sources instead of adding per-pixel
+    noise.
+    """
+    theta_f = np.asarray(theta_f)
+    phi_f = np.mod(np.asarray(phi_f), 2 * np.pi)
+    n = theta_f.size
+    cell = np.deg2rad(cell_deg)
+    star_r = np.deg2rad(star_radius_deg)
+
+    ix0 = np.floor(theta_f / cell).astype(np.int64)
+    iy0 = np.floor(phi_f / cell).astype(np.int64)
+
+    rgb = np.zeros((n, 3))
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            cx, cy = ix0 + dx, iy0 + dy
+            has_star = _hash2d(cx, cy, 1) < star_prob
+            star_theta = (cx + _hash2d(cx, cy, 2)) * cell
+            star_phi = (cy + _hash2d(cx, cy, 3)) * cell
+
+            dtheta = theta_f - star_theta
+            dphi = np.mod(phi_f - star_phi + np.pi, 2 * np.pi) - np.pi
+            dist = np.sqrt(dtheta**2 + dphi**2)
+            glow = np.clip(1.0 - dist / star_r, 0.0, 1.0)**2
+
+            brightness = (0.4 + 0.6 * _hash2d(cx, cy, 4))
+            tint = _hash2d(cx, cy, 5)
+            color = np.where(tint[:, None] < 0.15, [0.65, 0.75, 1.0],
+                     np.where(tint[:, None] > 0.85, [1.0, 0.85, 0.6], [1.0, 1.0, 1.0]))
+
+            contribution = has_star[:, None] * glow[:, None] * brightness[:, None] * color
+            rgb = np.maximum(rgb, contribution)
+
+    return rgb
+
+
 def hsv_to_rgb(h, s, v):
     h = np.asarray(h)
     i = np.floor(h * 6.0).astype(int) % 6
@@ -130,15 +182,16 @@ def hsv_to_rgb(h, s, v):
     return rgb
 
 
-def make_frame(a, theta_obs=THETA_OBS, resolution=RESOLUTION, verbose=True):
-    lin = np.linspace(-HALF_FOV, HALF_FOV, resolution)
+def make_frame(a, theta_obs=THETA_OBS, resolution=RESOLUTION, verbose=True,
+               r_obs=R_OBS, half_fov=HALF_FOV, sky_color_fn=celestial_color):
+    lin = np.linspace(-half_fov, half_fov, resolution)
     alpha_grid, beta_grid = np.meshgrid(lin, lin)
     alpha = alpha_grid.ravel()
     beta = beta_grid.ravel()
 
     t0 = time.time()
     status, theta_f, phi_f, r_disk, g_disk = trace(
-        alpha, beta, R_OBS, theta_obs, a, disk_outer=DISK_OUTER,
+        alpha, beta, r_obs, theta_obs, a, disk_outer=DISK_OUTER,
         disk_h_ratio=DISK_H_RATIO)
     if verbose:
         n_abs = (status == 0).sum()
@@ -151,7 +204,7 @@ def make_frame(a, theta_obs=THETA_OBS, resolution=RESOLUTION, verbose=True):
 
     rgb = np.zeros((alpha.size, 3))
     esc = (status == 1)
-    rgb[esc] = celestial_color(theta_f[esc], phi_f[esc])
+    rgb[esc] = sky_color_fn(theta_f[esc], phi_f[esc])
 
     disk = (status == 3)
     rgb[disk] = disk_color(r_disk[disk], g_disk[disk], a)
