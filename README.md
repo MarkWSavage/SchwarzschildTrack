@@ -21,19 +21,23 @@ accretion disk across a range of spin values.
   horizon, escapes to the celestial sphere, or hits the accretion disk. All
   pixels are integrated simultaneously as NumPy arrays.
 - **`render.py`** — Assembles ray-traced frames into an interactive HTML
-  figure with a slider over spin `a`. The celestial sphere is drawn as a
-  latitude/longitude grid (hue-coded by longitude, so repeated hue bands near
-  the shadow edge show how many times a ray has wound around the hole). The
-  accretion disk spans the ISCO out to `r = 20M`, colored by a blackbody
-  temperature profile shifted by relativistic beaming, so the side rotating
-  toward the observer renders hotter and brighter than the receding side.
+  figure with a slider over spin `a` (12 values from 0 to 0.998, at 500x500
+  resolution). The celestial sphere is drawn as a latitude/longitude grid
+  (hue-coded by longitude, so repeated hue bands near the shadow edge show
+  how many times a ray has wound around the hole). The accretion disk is a
+  finite-thickness, constant-opening-angle torus spanning the ISCO out to
+  `r = 20M`, colored by a blackbody temperature profile shifted by
+  relativistic beaming, so the side rotating toward the observer renders
+  hotter and brighter than the receding side. Frames are embedded as
+  compressed PNGs (via Pillow) rather than raw pixel arrays to keep the
+  output HTML small.
 
 ## Usage
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install numpy sympy plotly
+pip install numpy sympy plotly pillow
 
 python render.py          # writes kerr_shadow.html (frames cached in frames_cache.npz)
 ```

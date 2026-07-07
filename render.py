@@ -3,9 +3,12 @@ Assemble Kerr black-hole shadow images (one per spin value a) and publish
 them as an interactive Plotly figure with a slider over a, saved as a
 self-contained HTML file.
 """
+import base64
+import io
 import time
 import numpy as np
 import plotly.graph_objects as go
+from PIL import Image
 
 from raytrace import trace
 from kerr_geodesics import isco_radius
@@ -16,7 +19,7 @@ from kerr_geodesics import isco_radius
 R_OBS = 50.0
 THETA_OBS = np.deg2rad(75.0)      # observer inclination from the spin axis
 HALF_FOV = 9.0                    # image plane spans [-HALF_FOV, HALF_FOV] in M
-RESOLUTION = 260                  # RESOLUTION x RESOLUTION pixels
+RESOLUTION = 500                  # RESOLUTION x RESOLUTION pixels
 DISK_OUTER = 20.0                 # outer edge of the accretion disk, in M
 DISK_H_RATIO = 0.15                # disk aspect ratio H/r (constant-opening-angle torus)
 
@@ -142,6 +145,17 @@ def make_frame(a, resolution=RESOLUTION, verbose=True):
     return img
 
 
+def frame_to_data_uri(frame_uint8):
+    """Encode an (H, W, 3) uint8 array as a base64 PNG data URI. Plotly's
+    go.Image(z=...) serializes every pixel as JSON numbers, which balloons
+    the output HTML; a compressed PNG source is far smaller for images that
+    are mostly flat black (the shadow) or smooth gradients (the disk/sky).
+    """
+    buf = io.BytesIO()
+    Image.fromarray(frame_uint8, 'RGB').save(buf, format='PNG')
+    return 'data:image/png;base64,' + base64.b64encode(buf.getvalue()).decode('ascii')
+
+
 def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
                cache_path='frames_cache.npz'):
     cache = None
@@ -161,10 +175,12 @@ def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
             np.savez_compressed(cache_path, frames=np.stack(frames_data),
                                  spins=np.array(spins), resolution=resolution)
 
+    data_uris = [frame_to_data_uri(frame) for frame in frames_data]
+
     fig = go.Figure(
-        data=[go.Image(z=frames_data[0])],
+        data=[go.Image(source=data_uris[0])],
         frames=[
-            go.Frame(data=[go.Image(z=frames_data[i])], name=f'{a:.3f}')
+            go.Frame(data=[go.Image(source=data_uris[i])], name=f'{a:.3f}')
             for i, a in enumerate(spins)
         ],
     )
