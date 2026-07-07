@@ -8,6 +8,7 @@ import numpy as np
 import plotly.graph_objects as go
 
 from raytrace import trace
+from kerr_geodesics import isco_radius
 
 # ---------------------------------------------------------------------------
 # camera / image-plane setup
@@ -16,6 +17,49 @@ R_OBS = 50.0
 THETA_OBS = np.deg2rad(75.0)      # observer inclination from the spin axis
 HALF_FOV = 9.0                    # image plane spans [-HALF_FOV, HALF_FOV] in M
 RESOLUTION = 260                  # RESOLUTION x RESOLUTION pixels
+DISK_OUTER = 20.0                 # outer edge of the accretion disk, in M
+
+# peak of the (unshifted) x**-3 * (1 - x**-0.5) emissivity profile, x = r/r_isco
+_X_GRID = np.linspace(1.0001, 50.0, 200_000)
+_EMISSIVITY_PEAK = (_X_GRID**-3 * (1 - _X_GRID**-0.5)).max()
+
+
+def blackbody_rgb(temp_k):
+    """Tanner Helland's polynomial fit of the Planckian locus to sRGB."""
+    t = np.clip(temp_k, 1000.0, 40000.0) / 100.0
+
+    red = np.where(t <= 66, 255.0,
+                    329.698727446 * np.power(np.clip(t - 60, 1, None), -0.1332047592))
+    green = np.where(
+        t <= 66,
+        99.4708025861 * np.log(np.clip(t, 1, None)) - 161.1195681661,
+        288.1221695283 * np.power(np.clip(t - 60, 1, None), -0.0755148492))
+    blue = np.where(t >= 66, 255.0,
+                     np.where(t <= 19, 0.0,
+                              138.5177312231 * np.log(np.clip(t - 10, 1, None)) - 305.0447927307))
+
+    return np.clip(np.stack([red, green, blue], axis=-1) / 255.0, 0.0, 1.0)
+
+
+def disk_color(r_disk, g_disk, a):
+    """Color and relativistically-beamed brightness of the accretion disk at
+    the given impact radii, given the redshift factor g = E_obs/E_emit from
+    disk_redshift(). Inner/blueshifted (approaching) regions run hot and
+    bright; outer/redshifted (receding) regions run cool and dim.
+    """
+    r_isco = isco_radius(a)
+    x = np.clip(r_disk / r_isco, 1.0001, None)
+
+    emissivity = np.clip(x**-3 * (1 - x**-0.5), 0.0, None) / _EMISSIVITY_PEAK
+    t_emit = emissivity**0.25                      # local "temperature", peak = 1
+
+    g = np.clip(g_disk, 0.0, 3.0)
+    t_obs = t_emit * g                              # Doppler/gravitational shift of color
+    intensity = emissivity * g**4                    # relativistic beaming of flux
+
+    temp_k = 1500.0 + t_obs * 9000.0
+    rgb = blackbody_rgb(temp_k)
+    return rgb * np.clip(intensity, 0.0, 3.0)[:, None]**0.5
 
 
 def celestial_color(theta_f, phi_f):
@@ -74,17 +118,22 @@ def make_frame(a, resolution=RESOLUTION, verbose=True):
     beta = beta_grid.ravel()
 
     t0 = time.time()
-    status, theta_f, phi_f = trace(alpha, beta, R_OBS, THETA_OBS, a)
+    status, theta_f, phi_f, r_disk, g_disk = trace(
+        alpha, beta, R_OBS, THETA_OBS, a, disk_outer=DISK_OUTER)
     if verbose:
         n_abs = (status == 0).sum()
         n_esc = (status == 1).sum()
         n_unr = (status == 2).sum()
+        n_disk = (status == 3).sum()
         print(f'a={a:+.3f}  absorbed={n_abs:6d}  escaped={n_esc:6d}  '
-              f'unresolved={n_unr:6d}  ({time.time()-t0:.1f}s)')
+              f'disk={n_disk:6d}  unresolved={n_unr:6d}  ({time.time()-t0:.1f}s)')
 
     rgb = np.zeros((alpha.size, 3))
     esc = (status == 1)
     rgb[esc] = celestial_color(theta_f[esc], phi_f[esc])
+
+    disk = (status == 3)
+    rgb[disk] = disk_color(r_disk[disk], g_disk[disk], a)
     # absorbed and unresolved (status 0 and 2) stay pure black (shadow)
 
     img = rgb.reshape(resolution, resolution, 3)

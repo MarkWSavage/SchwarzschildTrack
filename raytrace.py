@@ -14,8 +14,8 @@ All pixels are integrated simultaneously as numpy arrays (a "wavefront" of
 what makes this fast enough in pure Python/numpy.
 """
 import numpy as np
-from kerr_geodesics import derivatives, horizon_radius, f_g_rr_inv, f_g_thth_inv, \
-    f_g_tt_inv, f_g_tphi_inv, f_g_phiphi_inv
+from kerr_geodesics import derivatives, horizon_radius, isco_radius, disk_redshift, \
+    f_g_rr_inv, f_g_thth_inv, f_g_tt_inv, f_g_tphi_inv, f_g_phiphi_inv
 
 
 def initial_conditions(alpha, beta, r_obs, theta_obs, a):
@@ -53,14 +53,24 @@ def initial_conditions(alpha, beta, r_obs, theta_obs, a):
 
 
 def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
-          step_coeff=0.04, dlambda_max=4.0):
-    """Integrate the wavefront of rays. Returns (status, theta_f, phi_f) arrays.
+          step_coeff=0.04, dlambda_max=4.0, disk_outer=20.0, disk_inner=None):
+    """Integrate the wavefront of rays. Returns
+    (status, theta_f, phi_f, r_disk, g_disk).
 
     status: 0 = absorbed by horizon, 1 = escaped to celestial sphere,
-            2 = unresolved after max_steps (treated as shadow edge / photon ring).
+            2 = unresolved after max_steps (treated as shadow edge / photon ring),
+            3 = absorbed by the equatorial accretion disk.
+    r_disk, g_disk: radius of disk impact and the combined gravitational +
+    Doppler redshift factor there (only meaningful where status == 3).
+
+    The disk is modeled as geometrically thin and optically thick, occupying
+    the equatorial plane between disk_inner (default: the ISCO) and
+    disk_outer. Set disk_outer=None to disable the disk entirely.
     """
     if escape_radius is None:
         escape_radius = r_obs + 1.0
+    if disk_inner is None:
+        disk_inner = isco_radius(a)
 
     r_h = horizon_radius(a)
     r, th, phi, pr, pth, L = initial_conditions(alpha, beta, r_obs, theta_obs, a)
@@ -69,6 +79,8 @@ def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
     status = np.full(n, 2, dtype=np.int8)   # default: unresolved
     theta_f = np.zeros(n)
     phi_f = np.zeros(n)
+    r_disk = np.zeros(n)
+    g_disk = np.zeros(n)
     active = np.ones(n, dtype=bool)
 
     eps_th = 1e-6
@@ -114,20 +126,33 @@ def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
         pr_new = pr + dlam / 6.0 * (k1[3] + 2 * k2[3] + 2 * k3[3] + k4[3])
         pth_new = pth + dlam / 6.0 * (k1[4] + 2 * k2[4] + 2 * k3[4] + k4[4])
 
+        r_old, th_old = r, th
         r = np.where(active, r_new, r)
         th = np.where(active, th_new, th)
         phi = np.where(active, phi_new, phi)
         pr = np.where(active, pr_new, pr)
         pth = np.where(active, pth_new, pth)
 
-        newly_absorbed = active & (r <= r_h * 1.001)
-        newly_escaped = active & (r >= escape_radius)
+        if disk_outer is not None:
+            crossed = active & (((th_old - np.pi / 2) * (th - np.pi / 2)) < 0)
+            denom = np.where(crossed, th - th_old, 1.0)
+            frac = np.where(crossed, (np.pi / 2 - th_old) / denom, 0.0)
+            r_cross = r_old + frac * (r - r_old)
+            in_disk = crossed & (r_cross >= disk_inner) & (r_cross <= disk_outer)
+        else:
+            in_disk = np.zeros(n, dtype=bool)
 
+        newly_absorbed = active & ~in_disk & (r <= r_h * 1.001)
+        newly_escaped = active & ~in_disk & (r >= escape_radius)
+
+        status[in_disk] = 3
+        r_disk[in_disk] = r_cross[in_disk]
+        g_disk[in_disk] = disk_redshift(r_cross[in_disk], a, L[in_disk])
         status[newly_absorbed] = 0
         status[newly_escaped] = 1
         theta_f[newly_escaped] = th[newly_escaped]
         phi_f[newly_escaped] = phi[newly_escaped]
 
-        active &= ~(newly_absorbed | newly_escaped)
+        active &= ~(in_disk | newly_absorbed | newly_escaped)
 
-    return status, theta_f, phi_f
+    return status, theta_f, phi_f, r_disk, g_disk

@@ -81,6 +81,28 @@ def horizon_radius(a_):
     return 1.0 + np.sqrt(np.clip(1.0 - a_**2, 0.0, None))
 
 
+def isco_radius(a_):
+    """Innermost stable circular (prograde, equatorial) orbit radius,
+    Bardeen-Press-Teukolsky (1972) eq. 2.21. Assumes a_ >= 0."""
+    z1 = 1 + (1 - a_**2)**(1/3) * ((1 + a_)**(1/3) + (1 - a_)**(1/3))
+    z2 = np.sqrt(3 * a_**2 + z1**2)
+    return 3 + z2 - np.sqrt((3 - z1) * (3 + z1 + 2 * z2))
+
+
+def disk_redshift(r_, a_, L_):
+    """Combined gravitational + Doppler redshift factor g = E_obs / E_emit
+    for a photon (impact parameter L_, energy E=1) received from matter on a
+    prograde circular equatorial Keplerian orbit at radius r_ in Kerr
+    spacetime (Bardeen, Press & Teukolsky 1972).
+    """
+    omega = 1.0 / (r_**1.5 + a_)
+    turning = np.clip(r_**1.5 - 3 * np.sqrt(r_) + 2 * a_, 1e-8, None)
+    u_t = (r_**1.5 + a_) / (r_**0.75 * np.sqrt(turning))
+    denom = u_t * (1 - omega * L_)
+    denom = np.where(np.abs(denom) < 1e-8, np.copysign(1e-8, denom), denom)
+    return 1.0 / denom
+
+
 if __name__ == '__main__':
     # sanity check: H should vanish along a null geodesic's initial data,
     # and the equations of motion should reduce to the Schwarzschild
