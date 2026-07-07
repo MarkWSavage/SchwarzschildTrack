@@ -327,7 +327,7 @@ def build_html(spins, inclinations_deg, out_path='kerr_shadow.html',
       const ii = parseInt(document.getElementById('inclSlider').value, 10);
       document.getElementById('spinLabel').textContent = 'a = ' + BH_SPINS[ai].toFixed(3);
       document.getElementById('inclLabel').textContent = BH_INCLS[ii] + '°';
-      Plotly.restyle('bhplot', {{source: [[BH_FRAMES[ai][ii]]]}}, [0]);
+      Plotly.restyle('bhplot', {{source: [BH_FRAMES[ai][ii]]}}, [0]);
     }}
     updateBH();
   </script>
