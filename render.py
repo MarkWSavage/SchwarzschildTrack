@@ -66,6 +66,17 @@ def disk_color(r_disk, g_disk, a):
     return rgb * np.clip(intensity, 0.0, 3.0)[:, None]**0.5
 
 
+def legend_gradient_css(n=9):
+    """CSS linear-gradient stops approximating disk_color's redshift ->
+    blackbody mapping at fixed peak emissivity, for the legend swatch."""
+    g = np.linspace(0.4, 2.0, n)
+    temp_k = 1500.0 + g * 9000.0
+    rgb = blackbody_rgb(temp_k) * np.clip(g**4, 0.0, 3.0)[:, None]**0.5
+    rgb = np.clip(rgb, 0.0, 1.0)
+    stops = [f'rgb({r*255:.0f},{g_*255:.0f},{b*255:.0f})' for r, g_, b in rgb]
+    return 'linear-gradient(to right, ' + ', '.join(stops) + ')'
+
+
 def celestial_color(theta_f, phi_f):
     """Latitude/longitude grid on the celestial sphere: white latitude
     lines, hue-coded (by longitude) longitude lines, dark background.
@@ -208,7 +219,89 @@ def build_html(spins, out_path='kerr_shadow.html', resolution=RESOLUTION,
     )
     fig.update_xaxes(scaleanchor='y', scaleratio=1)
 
-    fig.write_html(out_path, include_plotlyjs=True, full_html=False)
+    plot_fragment = fig.to_html(include_plotlyjs=True, full_html=False)
+    page = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kerr Black Hole Shadow &amp; Accretion Disk</title>
+<style>
+  :root {{ color-scheme: dark; }}
+  body {{
+    margin: 0; padding: 2rem 1rem 3rem;
+    background: #0b0b12; color: #d8d8e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex; flex-direction: column; align-items: center;
+  }}
+  .wrap {{ max-width: 860px; width: 100%; }}
+  h1 {{ font-size: 1.4rem; font-weight: 600; margin: 0 0 .3rem; color: #f2f2f8; }}
+  .subtitle {{ color: #9a9aab; font-size: .95rem; margin: 0 0 1.5rem; line-height: 1.5; }}
+  .plot-holder {{ display: flex; justify-content: center; }}
+  .legend {{
+    margin-top: 1.5rem; padding: 1rem 1.25rem; border-radius: 10px;
+    background: #14141e; border: 1px solid #242432;
+    font-size: .85rem; line-height: 1.6; color: #c2c2d0;
+  }}
+  .legend h2 {{ font-size: .8rem; text-transform: uppercase; letter-spacing: .04em;
+                color: #8a8aa0; margin: 0 0 .6rem; }}
+  .legend-row {{ display: flex; align-items: center; gap: .75rem; margin: .5rem 0; }}
+  .swatch {{ flex: 0 0 auto; width: 18px; height: 18px; border-radius: 4px; }}
+  .gradient-bar {{ flex: 1 1 auto; height: 12px; border-radius: 6px; }}
+  .gradient-labels {{ display: flex; justify-content: space-between; font-size: .75rem;
+                      color: #8a8aa0; margin-top: .2rem; }}
+  footer {{ margin-top: 1.5rem; font-size: .75rem; color: #6a6a80; text-align: center; }}
+  footer a {{ color: #9a9ac0; }}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Kerr black hole shadow &amp; accretion disk</h1>
+  <p class="subtitle">
+    Backward ray-traced null geodesics in Kerr spacetime (observer inclination
+    {np.rad2deg(THETA_OBS):.0f}&deg; from the spin axis). Drag the slider to see how the
+    shadow and disk change with spin <code>a</code>, from Schwarzschild
+    (<code>a=0</code>) to near-extremal (<code>a=0.998</code>).
+  </p>
+  <div class="plot-holder">
+  {plot_fragment}
+  </div>
+  <div class="legend">
+    <h2>Color key</h2>
+    <div class="legend-row">
+      <div class="swatch" style="background:#000;"></div>
+      <div>Black hole shadow &mdash; photons captured by the horizon.</div>
+    </div>
+    <div class="legend-row">
+      <div class="swatch" style="background:conic-gradient(red,yellow,lime,cyan,blue,magenta,red);
+                                  border-radius:50%;"></div>
+      <div>Lensed sky &mdash; a latitude/longitude grid on the celestial sphere. Longitude
+      lines are hue-coded; repeated hue bands near the shadow edge show how many times
+      that ray wound around the black hole (higher-order photon rings).</div>
+    </div>
+    <div class="legend-row">
+      <div class="gradient-bar" style="background:{legend_gradient_css()};"></div>
+    </div>
+    <div class="gradient-labels">
+      <span>receding &middot; redshifted &middot; dim</span>
+      <span>approaching &middot; blueshifted &middot; bright</span>
+    </div>
+    <div class="legend-row" style="margin-top:.75rem;">
+      <div>Accretion disk &mdash; a finite-thickness torus from the ISCO to
+      <code>r=20M</code>, colored by blackbody temperature and shifted by the combined
+      gravitational + Doppler redshift, so the side co-rotating toward the observer
+      renders hotter and brighter than the receding side.</div>
+    </div>
+  </div>
+  <footer>
+    <a href="https://github.com/MarkWSavage/SchwarzschildTrack">github.com/MarkWSavage/SchwarzschildTrack</a>
+  </footer>
+</div>
+</body>
+</html>
+"""
+    with open(out_path, 'w') as f:
+        f.write(page)
     print('wrote', out_path)
     return out_path
 
