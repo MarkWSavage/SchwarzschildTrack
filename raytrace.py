@@ -53,24 +53,31 @@ def initial_conditions(alpha, beta, r_obs, theta_obs, a):
 
 
 def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
-          step_coeff=0.04, dlambda_max=4.0, disk_outer=20.0, disk_inner=None):
+          step_coeff=0.04, dlambda_max=4.0, disk_outer=20.0, disk_inner=None,
+          disk_h_ratio=0.0):
     """Integrate the wavefront of rays. Returns
     (status, theta_f, phi_f, r_disk, g_disk).
 
     status: 0 = absorbed by horizon, 1 = escaped to celestial sphere,
             2 = unresolved after max_steps (treated as shadow edge / photon ring),
-            3 = absorbed by the equatorial accretion disk.
-    r_disk, g_disk: radius of disk impact and the combined gravitational +
-    Doppler redshift factor there (only meaningful where status == 3).
+            3 = absorbed by the accretion disk/torus.
+    r_disk, g_disk: cylindrical radius of disk impact and the combined
+    gravitational + Doppler redshift factor there (only meaningful where
+    status == 3; g_disk uses the equatorial circular-orbit formula as an
+    approximation to the true velocity off the midplane).
 
-    The disk is modeled as geometrically thin and optically thick, occupying
-    the equatorial plane between disk_inner (default: the ISCO) and
-    disk_outer. Set disk_outer=None to disable the disk entirely.
+    The disk is optically thick, spans disk_inner (default: the ISCO) to
+    disk_outer, and has constant aspect ratio disk_h_ratio = H/r (0 = a
+    geometrically thin disk in the equatorial plane; > 0 flares it into a
+    constant-opening-angle torus of half-thickness disk_h_ratio * r).
+    Set disk_outer=None to disable the disk entirely.
     """
     if escape_radius is None:
         escape_radius = r_obs + 1.0
     if disk_inner is None:
         disk_inner = isco_radius(a)
+    theta_top = np.arccos(np.clip(disk_h_ratio, 0.0, 0.999))
+    theta_bot = np.pi - theta_top
 
     r_h = horizon_radius(a)
     r, th, phi, pr, pth, L = initial_conditions(alpha, beta, r_obs, theta_obs, a)
@@ -134,9 +141,12 @@ def trace(alpha, beta, r_obs, theta_obs, a, max_steps=6000, escape_radius=None,
         pth = np.where(active, pth_new, pth)
 
         if disk_outer is not None:
-            crossed = active & (((th_old - np.pi / 2) * (th - np.pi / 2)) < 0)
+            top_branch = (th_old < theta_top) & (th >= theta_top)
+            bot_branch = (th_old > theta_bot) & (th <= theta_bot)
+            crossed = active & (top_branch | bot_branch)
+            theta_entry = np.where(top_branch, theta_top, theta_bot)
             denom = np.where(crossed, th - th_old, 1.0)
-            frac = np.where(crossed, (np.pi / 2 - th_old) / denom, 0.0)
+            frac = np.where(crossed, (theta_entry - th_old) / denom, 0.0)
             r_cross = r_old + frac * (r - r_old)
             in_disk = crossed & (r_cross >= disk_inner) & (r_cross <= disk_outer)
         else:

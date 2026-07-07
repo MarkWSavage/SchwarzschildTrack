@@ -18,6 +18,7 @@ THETA_OBS = np.deg2rad(75.0)      # observer inclination from the spin axis
 HALF_FOV = 9.0                    # image plane spans [-HALF_FOV, HALF_FOV] in M
 RESOLUTION = 260                  # RESOLUTION x RESOLUTION pixels
 DISK_OUTER = 20.0                 # outer edge of the accretion disk, in M
+DISK_H_RATIO = 0.15                # disk aspect ratio H/r (constant-opening-angle torus)
 
 # peak of the (unshifted) x**-3 * (1 - x**-0.5) emissivity profile, x = r/r_isco
 _X_GRID = np.linspace(1.0001, 50.0, 200_000)
@@ -119,7 +120,8 @@ def make_frame(a, resolution=RESOLUTION, verbose=True):
 
     t0 = time.time()
     status, theta_f, phi_f, r_disk, g_disk = trace(
-        alpha, beta, R_OBS, THETA_OBS, a, disk_outer=DISK_OUTER)
+        alpha, beta, R_OBS, THETA_OBS, a, disk_outer=DISK_OUTER,
+        disk_h_ratio=DISK_H_RATIO)
     if verbose:
         n_abs = (status == 0).sum()
         n_esc = (status == 1).sum()
